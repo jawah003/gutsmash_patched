@@ -1,4 +1,4 @@
-#!/bin/bash -i
+#!/bin/bash
 # Fix 2: Removed `-i` (interactive shell flag) from shebang — not appropriate for batch jobs.
 # Original: #!/bin/bash -i
 
@@ -6,8 +6,9 @@
 # SLURM directives
 # =============================================================================
 #SBATCH --job-name=gutsmash_array
-#SBATCH --output=logs/gutsmash_%A_%a.out
-#SBATCH --error=logs/gutsmash_%A_%a.err
+# Fix 7: Use full NFS paths for SLURM log files.
+#SBATCH --output=/nfs/jjawahar/mi_gutsmash/logs/gutsmash_%A_%a.out
+#SBATCH --error=/nfs/jjawahar/mi_gutsmash/logs/gutsmash_%A_%a.err
 #SBATCH --time=24:00:00
 # Fix 1: Changed --mem=200G → --mem=16G.
 # Original --mem=200G requested 200 GB *per task*, limiting concurrency to 1.
@@ -32,9 +33,11 @@ set -euo pipefail
 # =============================================================================
 set +u   # temporarily relax unbound-variable check for conda activation
 # shellcheck source=/dev/null
-#source "$(conda info --base)/etc/profile.d/conda.sh"
-source ~/.bashrc || source /nfs/jjawahar/miniforge3/etc/profile.d/conda.sh # Adjust conda path if necessary
-conda activate gutsmash_pipeline_v2
+# Fix 6: Use the correct miniforge3 conda.sh path.
+source ~/miniforge3/etc/profile.d/conda.sh
+# Fix 5: Activate conda env by full path so the script works regardless of
+#        whether the env name is registered in the current shell.
+conda activate /nfs/jjawahar/miniforge3/envs/gutsmash_pipeline_v2/
 set -u   # restore strict unbound-variable check
 
 # =============================================================================
@@ -50,7 +53,41 @@ RESULTS_DIR="${BASE_DIR}/results"
 # Can also copy over later
 READS_LIST="/nfs/jjawahar/humann3_pipeline/2025-4-10_metabolomics_samples/fastq_file_list.txt"
 
-TARGET_PATHWAYS=("RiPP" "NRPS" "PKS" "terpene" "saccharide")
+# Fix 1: Replace generic antiSMASH rule IDs with the exact gutSMASH rule IDs
+# sourced from antismash/detection/gut_hmm_detection/cluster_rules/strict.txt
+# and relaxed.txt. These are used for exact set membership matching in Phase 2.
+TARGET_PATHWAYS=(
+    # --- strict.txt rules ---
+    hydroxybenzoate2phenol pdu EUT_pathway TMA p-cresol
+    Arginine2_Hcarbonate Arginine2putrescine acetate2butyrate
+    Putrescine2spermidine proline2aminovalerate Leucine_reduction
+    gallic_acid_met bai_operon AAA_reductive_branch porA
+    PFOR_II_pathway Lysine_degradation glutamate2butyric
+    caffeate_respiration carnitine_degradaion_caiTABCDE
+    aminobutyrate2Butyrate succinate2propionate acrylate2propionate
+    Threonine2propionate Pyruvate2acetate-formate Glycine_reductase
+    Glycine_cleavage histidine2glutamate_hutHGIU_operon
+    Oxidative_glycerol Acetyl-CoA_pathway Fumarate2succinate
+    Indoleacetate2scatole Phenylacetate2toluene
+    Hydroxy-L-proline2proline Sulfate2sulfide Rnf_complex
+    Molybdopterin_dependent_oxidoreductase Nitrate_reductase
+    Ech_complex Formate_dehydrogenase Respiratory_glycerol
+    NADH_dehydrogenase_I Bilirubin_reductase
+    Anaerobic_sulfite_redutase Phenylpyruvate_ferredoxin_oxidoreductase
+    putative_2-oxoglutarate_ferredoxin_oxidoreductase
+    Sulfate2PAPS PAPS2sulfide Adenylylsulfate_reductase
+    r-butyrobetaine2TMA taurine2sulfite Alkanesulfonate2sulfite
+    sulfoquinovose-EMP_pathway sulfoquinovose-ED_pathway
+    xanthine_dehydrogenase uric_acid2SCFA
+    # --- relaxed.txt rules ---
+    Flavoenzyme_AA_peptides_catabolism Flavoenzyme_sugar_catabolism
+    Flavoenzyme_lipids_catabolism OD_lactate_related
+    OD_eut_pdu_related OD_AA_metabolism OD_fatty_acids
+    OD_aldehydes_related OD_unknown TPP_fatty_acids TPP_AA_metabolism
+    GR_AA_metabolism GR_eut-pdu-related GR_fatty_acids
+    OD_GR_eut_related OD_GR_unassigned fatty_acids-unassigned
+    Others_HGD_unassigned
+)
 # Export as a space-separated string so the Python heredoc can read it via
 # os.environ["TARGET_PATHWAYS"] — bash arrays cannot be exported directly.
 export TARGET_PATHWAYS="${TARGET_PATHWAYS[*]}"
@@ -79,11 +116,19 @@ echo "  Forward read : ${FORWARD_READ}"
 echo "  Reverse read : ${REVERSE_READ}"
 echo "  Scratch dir  : ${SCRATCH_DIR}"
 
+# Fix 2: Create numbered subdirectories within scratch to match the reference
+#        run_full_pipeline_array.sh structure for each pipeline phase.
+WORK_DIR="${SCRATCH_DIR}/${SAMPLE_ID}"
+DIR_GUTSMASH="${WORK_DIR}/1_gutsmash"
+DIR_EXTRACT="${WORK_DIR}/2_cluster_extraction"
+DIR_CDHIT="${WORK_DIR}/3_CD-HIT-EST"
+DIR_SALMON="${WORK_DIR}/4_salmon_quant"
+DIR_RPKM="${WORK_DIR}/5_abundance_RPKM"
+mkdir -p "${DIR_GUTSMASH}" "${DIR_EXTRACT}" "${DIR_CDHIT}" "${DIR_SALMON}" "${DIR_RPKM}"
+
 # =============================================================================
 # Phase 1 — Run gutSMASH on all MAGs for this sample
 # =============================================================================
-SAMPLE_RESULTS_DIR="${SCRATCH_DIR}/gutsmash_results"
-mkdir -p "${SAMPLE_RESULTS_DIR}"
 
 # Fix 7: Use nullglob so that a pattern with no matching files expands to nothing
 #        instead of being kept as a literal string in the array.
@@ -105,7 +150,7 @@ echo "[$(date '+%F %T')] Phase 1: Running gutSMASH on ${#SAMPLE_MAGS[@]} MAG(s)"
 
 for MAG in "${SAMPLE_MAGS[@]}"; do
     MAG_BASENAME=$(basename "${MAG%.*}")
-    MAG_OUT_DIR="${SAMPLE_RESULTS_DIR}/${MAG_BASENAME}"
+    MAG_OUT_DIR="${DIR_GUTSMASH}/${MAG_BASENAME}"
     mkdir -p "${MAG_OUT_DIR}"
 
     echo "  Processing MAG: ${MAG_BASENAME}"
@@ -126,31 +171,35 @@ done
 # =============================================================================
 echo "[$(date '+%F %T')] Phase 2: Extracting target cluster sequences"
 
-EXTRACTED_FASTA="${SCRATCH_DIR}/${SAMPLE_ID}_clusters.fa"
+EXTRACTED_FASTA="${DIR_EXTRACT}/${SAMPLE_ID}_clusters.fa"
+
+# Fix 3: Pass the correct directory env vars to the Python heredoc.
+export DIR_GUTSMASH EXTRACTED_FASTA
 
 python3 - <<'PYTHON_SCRIPT'
-# Fix 5A: The original loop used `feature.get(...)` inside `for feat in features:`.
-#         `feature` was never defined — this caused an immediate NameError.
-# Fix 5B: The original used `feature.get("sequence", "NNNN")` to retrieve the
-#         nucleotide sequence. In gutSMASH's JSON (antiSMASH serialisation),
-#         sequences are stored at the *record* level under record["seq"]["data"],
-#         NOT inside feature dicts. The fallback "NNNN" always fired, producing
-#         an output FASTA full of NNNN strings.
-#
-# Correct approach:
-#   1. Read the parent record's sequence from record["seq"]["data"].
-#   2. Parse the feature's "location" string (format: "[start:end](strand)") to
-#      obtain start/end coordinates.
-#   3. Slice the record sequence to get the actual cluster nucleotides.
+# Fix 3 (Python extraction):
+#   - Use DIR_GUTSMASH (numbered dir) instead of old SAMPLE_RESULTS_DIR.
+#   - Feature type changed to "protocluster" — that is where gutSMASH stores
+#     rule-matched clusters with product qualifiers (confirmed in run_full_pipeline.sh).
+#   - Exact set membership matching: `p in targets` replaces substring matching.
+#   - FASTA headers use "__" as delimiter (Salmon-safe; no "|" characters).
+#   - Generates clusters_summary.csv alongside the FASTA.
 import os
 import sys
 import json
 import re
 import glob
+import csv
 
-results_dir  = os.environ["SAMPLE_RESULTS_DIR"]
+results_dir  = os.environ["DIR_GUTSMASH"]
 output_fasta = os.environ["EXTRACTED_FASTA"]
-targets      = set(os.environ.get("TARGET_PATHWAYS", "RiPP NRPS PKS terpene saccharide").split())
+targets      = set(os.environ.get("TARGET_PATHWAYS", "").split())
+
+if not targets:
+    raise RuntimeError("TARGET_PATHWAYS environment variable is empty or unset — aborting extraction")
+
+extract_dir  = os.path.dirname(output_fasta)
+summary_csv  = os.path.join(extract_dir, "clusters_summary.csv")
 
 LOCATION_RE = re.compile(r"\[(\d+):(\d+)\]")
 
@@ -162,8 +211,15 @@ def parse_location(loc_str):
     return int(m.group(1)), int(m.group(2))
 
 written = 0
-with open(output_fasta, "w") as out_fh:
+with open(output_fasta, "w") as out_fh, \
+     open(summary_csv, "w", newline="") as csv_fh:
+
+    writer = csv.writer(csv_fh)
+    writer.writerow(["mag_id", "record_id", "product", "start", "end", "length"])
+
     for json_file in glob.glob(os.path.join(results_dir, "**", "*.json"), recursive=True):
+        # mag_dir is the name of the gutSMASH output folder for this MAG
+        mag_dir = os.path.basename(os.path.dirname(json_file))
         try:
             with open(json_file) as jf:
                 data = json.load(jf)
@@ -172,22 +228,22 @@ with open(output_fasta, "w") as out_fh:
             continue
 
         for record in data.get("records", []):
-            # Fix 5B: sequence is at the record level, under record["seq"]["data"]
+            # Sequence is stored at the record level under record["seq"]["data"]
             record_seq = record.get("seq", {}).get("data", "")
             record_id  = record.get("id", "unknown")
 
-            for feat in record.get("features", []):        # Fix 5A: was `feature`
-                feat_type = feat.get("type", "")           # Fix 5A: was `feature.get`
-                if feat_type not in ("region", "subregion", "cand_cluster"):
+            for feat in record.get("features", []):
+                # Fix 3: Check for "protocluster" type — gutSMASH stores
+                # rule-matched clusters here (not "region"/"subregion"/"cand_cluster").
+                if feat.get("type", "") != "protocluster":
                     continue
 
                 qualifiers = feat.get("qualifiers", {})
-                # gutSMASH/antiSMASH stores the BGC type in the "product" qualifier
                 product_list = qualifiers.get("product", [])
                 products = product_list if isinstance(product_list, list) else [product_list]
 
-                # Check whether any product matches a target pathway
-                if not any(any(t.lower() in p.lower() for t in targets) for p in products):
+                # Fix 3: Exact set membership — no substring/fuzzy matching.
+                if not any(p in targets for p in products):
                     continue
 
                 loc_str = feat.get("location", "")
@@ -196,17 +252,22 @@ with open(output_fasta, "w") as out_fh:
                     print(f"WARNING: Cannot parse location '{loc_str}' in {json_file}", file=sys.stderr)
                     continue
 
-                # Fix 5B: slice the record-level sequence for the actual nucleotides
                 cluster_seq = record_seq[start:end] if record_seq else "NNNN"
                 if not cluster_seq:
                     cluster_seq = "NNNN"
 
-                product_str = "_".join(products) if products else "unknown"
-                header = f">{record_id}|{feat_type}|{start}-{end}|{product_str}"
+                product = products[0] if products else "unknown"
+                length  = end - start
+
+                # Fix 4: Use "__" delimiter (Salmon-safe; avoids "|" parsing issues).
+                header = f">{mag_dir}__{record_id}__{product}__{start}__{end}"
                 out_fh.write(f"{header}\n{cluster_seq}\n")
+
+                writer.writerow([mag_dir, record_id, product, start, end, length])
                 written += 1
 
 print(f"Extracted {written} cluster sequence(s) to {output_fasta}")
+print(f"Summary written to {summary_csv}")
 PYTHON_SCRIPT
 
 # =============================================================================
@@ -214,7 +275,7 @@ PYTHON_SCRIPT
 # =============================================================================
 echo "[$(date '+%F %T')] Phase 3: Dereplicating with CD-HIT-EST"
 
-DEREP_FASTA="${SCRATCH_DIR}/${SAMPLE_ID}_clusters_derep.fa"
+DEREP_FASTA="${DIR_CDHIT}/${SAMPLE_ID}_clusters_derep.fa"
 
 cd-hit-est \
     -i "${EXTRACTED_FASTA}" \
@@ -229,8 +290,8 @@ cd-hit-est \
 # =============================================================================
 echo "[$(date '+%F %T')] Phase 4: Quantifying with Salmon"
 
-SALMON_INDEX="${SCRATCH_DIR}/${SAMPLE_ID}_salmon_index"
-SALMON_QUANT="${SCRATCH_DIR}/${SAMPLE_ID}_salmon_quant"
+SALMON_INDEX="${DIR_SALMON}/${SAMPLE_ID}_salmon_index"
+SALMON_QUANT="${DIR_SALMON}/${SAMPLE_ID}_salmon_quant"
 
 salmon index \
     -t "${DEREP_FASTA}" \
@@ -266,11 +327,35 @@ echo "  Counting total reads in ${FORWARD_READ} ..."
 TOTAL_READS=$(zcat "${FORWARD_READ}" | awk 'END{print NR/4}')
 echo "  Total reads: ${TOTAL_READS}"
 
-RPKM_CSV="${SCRATCH_DIR}/${SAMPLE_ID}_rpkm.csv"
+RPKM_CSV="${DIR_RPKM}/${SAMPLE_ID}_rpkm.csv"
+INLINE_R_SCRIPT="${DIR_RPKM}/rpkm_normalize.R"
+
+# Fix 5 (inlined R heredoc): Write the R normalisation script inline so the
+# pipeline is fully self-contained (no external rpkm_normalize.R required).
+# Args: 1=quant_file  2=out_file  3=total_library_reads
+cat > "${INLINE_R_SCRIPT}" <<'RSCRIPT'
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 3) {
+  stop("Usage: Rscript rpkm_normalize.R <quant.sf> <out.csv> <total_library_reads>")
+}
+quant_file          <- args[1]
+out_file            <- args[2]
+total_library_reads <- as.numeric(args[3])
+
+quant <- read.table(quant_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+# RPKM = (NumReads * 1e9) / (EffectiveLength * total_library_reads)
+# Using total_library_reads (full library size) as denominator — NOT total_mapped —
+# so values are comparable across samples regardless of pathway representation.
+quant$RPKM <- (quant$NumReads * 1e9) / (quant$EffectiveLength * total_library_reads)
+
+write.csv(quant[, c("Name", "NumReads", "TPM", "RPKM")], out_file, row.names = FALSE)
+cat("RPKM normalisation complete:", out_file, "\n")
+RSCRIPT
 
 # Pass TOTAL_READS as the third argument so the R script uses it as the
-# library-size denominator (args[3]) instead of total_mapped.
-Rscript "${BASE_DIR}/rpkm_normalize.R" \
+# library-size denominator instead of total_mapped.
+Rscript "${INLINE_R_SCRIPT}" \
     "${SALMON_QUANT}/quant.sf" \
     "${RPKM_CSV}" \
     "${TOTAL_READS}"
@@ -283,7 +368,13 @@ echo "[$(date '+%F %T')] Copying results to NFS"
 FINAL_DIR="${RESULTS_DIR}/${SAMPLE_ID}"
 mkdir -p "${FINAL_DIR}"
 
-cp "${SALMON_QUANT}/quant.sf" "${FINAL_DIR}/${SAMPLE_ID}_quant.sf"
-cp "${RPKM_CSV}"              "${FINAL_DIR}/${SAMPLE_ID}_rpkm.csv"
+cp "${SALMON_QUANT}/quant.sf"            "${FINAL_DIR}/${SAMPLE_ID}_quant.sf"
+cp "${RPKM_CSV}"                         "${FINAL_DIR}/${SAMPLE_ID}_rpkm.csv"
+
+# Copy clusters_summary.csv if it was generated (may be absent if no clusters matched)
+SUMMARY_CSV="${DIR_EXTRACT}/clusters_summary.csv"
+if [[ -f "${SUMMARY_CSV}" ]]; then
+    cp "${SUMMARY_CSV}" "${FINAL_DIR}/clusters_summary.csv"
+fi
 
 echo "[$(date '+%F %T')] Done: ${SAMPLE_ID}"
