@@ -11,8 +11,34 @@ from typing import Any, Callable, List, Set, Tuple, Union
 import warnings
 
 import Bio
-from Bio.Seq import Seq, UnknownSeq
+from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+
+# biopython >= 1.78 removed UnknownSeq; provide a minimal stub for isinstance checks
+try:
+    from Bio.Seq import UnknownSeq
+except ImportError:
+    class UnknownSeq(Seq):  # type: ignore[no-redef]
+        """Stub replacing the removed biopython UnknownSeq class."""
+        pass
+
+# biopython >= 1.78 removed Bio.Alphabet; provide stubs for isinstance/attribute checks
+try:
+    import Bio.Alphabet
+    import Bio.Alphabet.IUPAC
+except ImportError:
+    class _ProteinAlphabet:  # type: ignore[no-redef]
+        pass
+    class _GenericDNA:  # type: ignore[no-redef]
+        pass
+    class _IUPAC:  # type: ignore[no-redef]
+        pass
+    class _Alphabet:  # type: ignore[no-redef]
+        ProteinAlphabet = _ProteinAlphabet
+        generic_dna = _GenericDNA()
+        IUPAC = _IUPAC()
+    import Bio
+    Bio.Alphabet = _Alphabet()  # type: ignore[attr-defined]
 from helperlibs.bio import seqio
 
 from antismash.common import gff_parser

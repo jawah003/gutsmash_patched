@@ -10,9 +10,22 @@ import json
 import logging
 from typing import Any, Dict, IO, List, Union
 
-import Bio.Alphabet
-import Bio.Alphabet.IUPAC
 from Bio.Seq import Seq
+
+# biopython >= 1.78 removed Bio.Alphabet; provide stubs so JSON round-trips still work
+try:
+    import Bio.Alphabet
+    import Bio.Alphabet.IUPAC
+except ImportError:
+    class _IUPACStub:  # type: ignore[no-redef]
+        def __getattr__(self, name: str):  # type: ignore[override]
+            return type(name, (), {})()
+    class _AlphabetStub:  # type: ignore[no-redef]
+        IUPAC = _IUPACStub()
+        def __getattr__(self, name: str):  # type: ignore[override]
+            return type(name, (), {})()
+    import Bio
+    Bio.Alphabet = _AlphabetStub()  # type: ignore[attr-defined]
 from Bio.SeqFeature import SeqFeature, Reference
 from Bio.SeqRecord import SeqRecord
 
@@ -167,20 +180,26 @@ def record_from_json(data: Union[str, Dict]) -> SeqRecord:
         annotations["references"] = refs
         return annotations
 
+    annotations = rebuild_references(data["annotations"])
+    # biopython >= 1.78 requires molecule_type in annotations for GenBank output
+    if "molecule_type" not in annotations:
+        annotations["molecule_type"] = "DNA"
     return SeqRecord(sequence_from_json(data["seq"]),
                      id=data["id"],
                      name=data["name"],
                      description=data["description"],
                      dbxrefs=data["dbxrefs"],
                      features=list(map(feature_from_json, data["features"])),
-                     annotations=rebuild_references(data["annotations"]),
+                     annotations=annotations,
                      letter_annotations=data["letter_annotations"])
 
 
 def sequence_to_json(sequence: Seq) -> Dict[str, str]:
     """ Constructs a JSON object that represents a Seq sequence """
-    return {"data": str(sequence),
-            "alphabet": str(sequence.alphabet).rsplit('()')[0]}  # DNA() -> DNA
+    # biopython >= 1.78: Seq has no .alphabet attribute; store a fixed placeholder
+    alphabet = getattr(sequence, "alphabet", None)
+    alphabet_str = str(alphabet).rsplit("()")[0] if alphabet is not None else "IUPACAmbiguousDNA"
+    return {"data": str(sequence), "alphabet": alphabet_str}
 
 
 def sequence_from_json(data: Union[str, Dict]) -> Seq:
@@ -188,12 +207,8 @@ def sequence_from_json(data: Union[str, Dict]) -> Seq:
     if isinstance(data, str):
         data = json.loads(data)
     assert isinstance(data, dict)
-    alphabet = data["alphabet"]
-    if "IUPAC" in alphabet:
-        alphabet_class = getattr(Bio.Alphabet.IUPAC, alphabet)
-    else:
-        alphabet_class = getattr(Bio.Alphabet, alphabet)
-    return Seq(data["data"], alphabet=alphabet_class())
+    # biopython >= 1.78: Seq() no longer accepts an alphabet argument
+    return Seq(data["data"])
 
 
 def feature_to_json(feature: SeqFeature) -> Dict[str, Any]:

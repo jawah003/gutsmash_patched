@@ -8,7 +8,6 @@ from typing import Iterable, List, Sequence, Tuple, Union
 from typing import Optional  # in comment hints, pylint: disable=unused-import
 
 from Bio.SeqFeature import (
-    AbstractPosition,
     AfterPosition,
     BeforePosition,
     CompoundLocation,
@@ -17,6 +16,12 @@ from Bio.SeqFeature import (
     SeqFeature,
     UnknownPosition,
 )
+
+# biopython >= 1.80 removed AbstractPosition; use int as a structural alias
+try:
+    from Bio.SeqFeature import AbstractPosition
+except ImportError:
+    AbstractPosition = int  # type: ignore[assignment,misc]
 
 Location = Union[CompoundLocation, FeatureLocation]  # pylint: disable=invalid-name
 

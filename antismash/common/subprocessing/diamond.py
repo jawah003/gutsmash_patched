@@ -26,6 +26,17 @@ def run_diamond(subcommand: str,
     config = get_config()
     if not config.executables.diamond:
         raise RuntimeError("no available diamond executable")
+
+    # diamond >= 2.x: 'version' subcommand does not accept --threads or --tmpdir
+    if subcommand == "version":
+        params = [config.executables.diamond, subcommand]
+        if opts:
+            params.extend(opts)
+        result = execute(params)
+        if not result.successful():
+            raise RuntimeError("diamond failed to run: %s -> %s" % (subcommand, result.stderr[-100:]))
+        return result
+
     with TemporaryDirectory() as temp_dir:
         params = [
             config.executables.diamond,

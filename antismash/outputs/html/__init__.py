@@ -54,10 +54,20 @@ def prepare_data(_logging_only: bool = False) -> List[str]:
             for flavour in flavours:
                 target = "%s.css" % flavour
                 assert os.path.exists(flavour + ".scss"), flavour
-                result = scss.Compiler(output_style="expanded").compile(flavour + ".scss")
-                assert result
-                with open(target, "w") as out:
-                    out.write(result)
+                # pyscss uses a regex with an invalid escape sequence that raises
+                # a DeprecationWarning→error in Python 3.11+. Suppress it here.
+                # This block is only reached when CSS files are stale (not in --minimal mode).
+                try:
+                    import warnings as _warnings
+                    with _warnings.catch_warnings():
+                        _warnings.filterwarnings("ignore", category=DeprecationWarning)
+                        result = scss.Compiler(output_style="expanded").compile(flavour + ".scss")
+                except Exception as scss_err:
+                    logging.warning("pyscss compilation failed (%s); using pre-built CSS if available", scss_err)
+                    result = None
+                if result:
+                    with open(target, "w") as out:
+                        out.write(result)
     return []
 
 
