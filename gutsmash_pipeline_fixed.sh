@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -i
 # Fix 2: Removed `-i` (interactive shell flag) from shebang — not appropriate for batch jobs.
 # Original: #!/bin/bash -i
 
@@ -32,20 +32,22 @@ set -euo pipefail
 # =============================================================================
 set +u   # temporarily relax unbound-variable check for conda activation
 # shellcheck source=/dev/null
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate gutsmash_env
+#source "$(conda info --base)/etc/profile.d/conda.sh"
+source ~/.bashrc || source /nfs/jjawahar/miniforge3/etc/profile.d/conda.sh # Adjust conda path if necessary
+conda activate gutsmash_pipeline_v2
 set -u   # restore strict unbound-variable check
 
 # =============================================================================
 # Configuration
 # =============================================================================
-BASE_DIR="/nfs/jjawahar/gutsmash_pipeline"
+BASE_DIR="/nfs/jjawahar/mi_gutsmash"
 GUTSMASH_DIR="${BASE_DIR}/gutsmash_patched"
-MAGS_DIR="${BASE_DIR}/mags"
+MAGS_DIR="/nfs/abyrd/GNE/FDB1485/20_mags/nopurify"
 RESULTS_DIR="${BASE_DIR}/results"
 
 # Fix 3: Updated READS_LIST to the correct NFS path.
 # Original: READS_LIST="${BASE_DIR}/forward_reads_list.txt"
+# Can also copy over later
 READS_LIST="/nfs/jjawahar/humann3_pipeline/2025-4-10_metabolomics_samples/fastq_file_list.txt"
 
 TARGET_PATHWAYS=("RiPP" "NRPS" "PKS" "terpene" "saccharide")
